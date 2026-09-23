@@ -3194,3 +3194,49 @@ def test_validate_chat_template_rejects_invalid_type():
     ) as exc_info:
         validate_chat_template(123)  # type: ignore[arg-type]
     assert exc_info.value.parameter == "chat_template"
+
+
+def _text_only_model_config() -> MagicMock:
+    model_config = MagicMock()
+    model_config.enable_prompt_embeds = False
+    model_config.multimodal_config = None
+    return model_config
+
+
+@pytest.mark.parametrize("field", ["reasoning", "reasoning_content"])
+def test_parse_chat_messages_keeps_assistant_reasoning(field: str):
+    """Assistant reasoning survives parsing whichever field name the client
+    used (https://github.com/vllm-project/vllm/issues/38488).
+
+    The OpenAI-compatible request models rename ``reasoning_content`` before
+    validation, but ``LLM.chat()`` and the renderers hand raw dicts straight
+    to ``parse_chat_messages``; the alias must be honored here as well.
+    """
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello", field: "think"},
+    ]
+
+    conversation, _, _ = parse_chat_messages(
+        messages, _text_only_model_config(), "string"
+    )
+
+    assert conversation[1]["reasoning"] == "think"
+    assert conversation[1]["reasoning_content"] == "think"
+
+
+def test_parse_chat_messages_reasoning_wins_over_deprecated_alias():
+    messages = [
+        {
+            "role": "assistant",
+            "content": "hello",
+            "reasoning": "new",
+            "reasoning_content": "old",
+        },
+    ]
+
+    conversation, _, _ = parse_chat_messages(
+        messages, _text_only_model_config(), "string"
+    )
+
+    assert conversation[0]["reasoning"] == "new"

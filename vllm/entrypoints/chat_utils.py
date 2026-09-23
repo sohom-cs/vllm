@@ -382,6 +382,9 @@ class CustomChatCompletionMessageParam(TypedDict, total=False):
     reasoning: str | None
     """The reasoning content for interleaved thinking."""
 
+    reasoning_content: str | None
+    """Deprecated alias of ``reasoning``; honored when ``reasoning`` is unset."""
+
     tools: list[ChatCompletionFunctionToolParam] | None
     """The tools for developer role."""
 
@@ -2013,6 +2016,11 @@ def _parse_chat_message_content(
     role = message["role"]
     content = message.get("content")
     reasoning = message.get("reasoning")
+    if reasoning is None:
+        # Deprecated alias still sent by many clients (litellm, Vercel AI SDK).
+        # Only the OpenAI-compatible request models rename it up front; offline
+        # `LLM.chat()` and renderers reach this point with the raw dict.
+        reasoning = message.get("reasoning_content")
 
     if content is None:
         content = []
