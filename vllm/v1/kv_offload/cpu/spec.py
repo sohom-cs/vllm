@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+from collections.abc import Mapping
 from typing import Any
 
 from typing_extensions import override
@@ -96,16 +97,22 @@ class CPUOffloadingSpec(OffloadingSpec):
             )
         return definitions
 
+    @classmethod
+    @override
+    def uses_async_init(cls, extra_config: Mapping[str, Any]) -> bool:
+        # Pinning would race graph capture without a capture-mode guard.
+        return (
+            bool(extra_config.get("async_init", False)) and current_platform.is_cuda()
+        )
+
     def __init__(self, config: OffloadingConfig):
         super().__init__(config)
 
         # Pre-fault and pin the region in the background; the engine serves
         # without offloading until every worker is ready.
-        self.async_init = bool(self.extra_config.get("async_init", False))
-        if self.async_init and not current_platform.is_cuda():
-            # Pinning would race graph capture without a capture-mode guard.
+        self.async_init = CPUOffloadingSpec.uses_async_init(self.extra_config)
+        if not self.async_init and self.extra_config.get("async_init", False):
             logger.warning("async_init needs CUDA; setting the CPU tier up now")
-            self.async_init = False
         # Pause between background pin calls, as a multiple of each call's time.
         self.async_init_pin_pace = float(
             self.extra_config.get("async_init_pin_pace", 2.0)

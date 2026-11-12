@@ -52,6 +52,7 @@ Example out-of-tree tier configuration:
 }
 """
 
+from collections.abc import Mapping
 from typing import Any
 
 from typing_extensions import override
@@ -330,6 +331,11 @@ class TieringOffloadingSpec(CPUOffloadingSpec):
         )
 
         return metrics
+
+    @classmethod
+    @override
+    def uses_async_init(cls, extra_config: Mapping[str, Any]) -> bool:
+        return False
 
     def __init__(self, config: OffloadingConfig):
         super().__init__(config)

@@ -53,6 +53,7 @@ class _ConnectorMetricName:
     LOOKUP_SYNC_DELAY = "vllm:kv_offload_lookup_sync_delay_seconds"
     LOOKUP_ASYNC_DELAY = "vllm:kv_offload_lookup_async_delay_seconds"
     ALLOCATION_FAILURE = "vllm:kv_offload_allocation_failure"
+    OFFLOADING_ENABLED = "vllm:kv_offload_enabled"
 
 
 class _TransferType:
@@ -141,6 +142,12 @@ def get_connector_metric_definitions() -> dict[str, OffloadingMetricMetadata]:
         _ConnectorMetricName.ALLOCATION_FAILURE: OffloadingCounterMetadata(
             documentation=(
                 "Number of KV offload store allocation attempts that failed."
+            ),
+        ),
+        _ConnectorMetricName.OFFLOADING_ENABLED: OffloadingGaugeMetadata(
+            documentation=(
+                "1 when KV offloading is on; 0 while async_init is setting it up, "
+                "or if that setup failed. Only goes from 0 to 1."
             ),
         ),
     }
@@ -449,6 +456,14 @@ class OffloadPromMetrics(KVConnectorPromMetrics):
         for metric_name, metadata in self._offloading_metric_metadata.items():
             self._offloading_metric_defs[metric_name] = self._create_metric(
                 metric_name, metadata
+            )
+
+        # Connector stats arrive only with engine steps, so set the gauge here
+        # for engines that have not stepped yet.
+        enabled = 0 if self._spec_cls.uses_async_init(extra_config) else 1
+        for engine_idx in per_engine_labelvalues:
+            self._set_gauge(
+                _ConnectorMetricName.OFFLOADING_ENABLED, enabled, (), engine_idx
             )
 
     def _create_metric(

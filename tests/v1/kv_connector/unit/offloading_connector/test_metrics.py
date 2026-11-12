@@ -132,6 +132,10 @@ def _spec_cls_with_metric_definitions(
         def config_info_keys(extra_config):
             return info_keys
 
+        @staticmethod
+        def uses_async_init(extra_config):
+            return False
+
     return _FakeOffloadingSpec
 
 
@@ -1122,3 +1126,54 @@ def test_scheduler_sends_the_config_info_once(request_runner):
     assert stats is not None
     assert stats.data[_StatsKey.INFO] == [{}]
     assert runner.connector_scheduler.get_stats() is None
+
+
+@pytest.mark.parametrize(
+    ("extra_config", "is_cuda", "expected"),
+    [
+        ({"async_init": False}, True, 1),
+        ({"async_init": True}, True, 0),
+        ({"async_init": True}, False, 1),
+        # Tiering ignores async_init and sets its CPU tier up at startup.
+        (
+            {
+                "async_init": True,
+                "spec_name": "TieringOffloadingSpec",
+                "secondary_tiers": [],
+            },
+            True,
+            1,
+        ),
+    ],
+)
+def test_prom_metrics_offloading_enabled_starts_from_config(
+    extra_config, is_cuda, expected
+):
+    """An engine that has not stepped yet reports whether offloading is on."""
+    with patch(
+        "vllm.v1.kv_offload.cpu.spec.current_platform.is_cuda", return_value=is_cuda
+    ):
+        prom_metrics = OffloadPromMetrics(
+            vllm_config=_FakeVllmConfig(extra_config=extra_config),
+            metric_types={
+                Gauge: _FakeMetric,
+                Counter: _FakeMetric,
+                Histogram: _FakeMetric,
+            },
+            labelnames=["model_name", "engine"],
+            per_engine_labelvalues={0: ["model", "0"], 1: ["model", "1"]},
+        )
+    enabled = _ConnectorMetricName.OFFLOADING_ENABLED
+    for engine_idx in (0, 1):
+        gauge = prom_metrics.offloading_metrics[(engine_idx, enabled, ())]
+        assert gauge.set_values == [expected]
+
+    # The scheduler reports 1 once every worker is ready.
+    stats = OffloadingConnectorStats()
+    stats.set_gauge(enabled, 1)
+    prom_metrics.observe(stats.data, engine_idx=1)
+    assert prom_metrics.offloading_metrics[(1, enabled, ())].set_values == [
+        expected,
+        1,
+    ]
+    assert prom_metrics.offloading_metrics[(0, enabled, ())].set_values == [expected]

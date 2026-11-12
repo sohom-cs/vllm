@@ -3,7 +3,7 @@
 import weakref
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 import torch
@@ -44,6 +44,7 @@ from vllm.distributed.kv_transfer.kv_connector.v1.offloading.config import (
 from vllm.distributed.kv_transfer.kv_connector.v1.offloading.metrics import (
     OffloadingConnectorStats,
     _ConnectorMetricName,
+    _StatsKey,
 )
 from vllm.distributed.kv_transfer.kv_connector.v1.offloading.scheduler import (
     OffloadingConnectorScheduler,
@@ -103,6 +104,7 @@ from vllm.v1.kv_offload.cpu.manager import CPUOffloadingManager
 from vllm.v1.kv_offload.cpu.shared_offload_region import SharedOffloadRegion
 from vllm.v1.kv_offload.cpu.spec import CPUOffloadingSpec
 from vllm.v1.kv_offload.tiering.example.manager import ExampleSecondaryTierManager
+from vllm.v1.kv_offload.tiering.spec import TieringOffloadingSpec
 from vllm.v1.metrics.cache_hit_source import CacheHitSource
 from vllm.v1.outputs import KVConnectorOutput, ModelRunnerOutput
 from vllm.v1.request import Request, RequestStatus
@@ -2304,6 +2306,66 @@ def test_async_init_offloads_only_after_workers_are_ready(request_runner):
     ready = True
     runner.run(decoded_tokens=[0, 0, 0], expected_stored=(0, 1))
     assert runner.connector_scheduler._offloading_enabled
+
+
+def _offloading_enabled_reports(runner) -> list[int | float]:
+    name = _ConnectorMetricName.OFFLOADING_ENABLED
+    reports: list[int | float] = []
+    for payload in runner.kv_connector_stats:
+        data = (
+            payload.data if isinstance(payload, OffloadingConnectorStats) else payload
+        )
+        reports.extend(data.get(_StatsKey.DATA, {}).get(name, {}).values())
+    return reports
+
+
+def test_async_init_reports_offloading_enabled_once(request_runner):
+    block_size = 4
+    runner = request_runner(
+        block_size=block_size,
+        num_gpu_blocks=100,
+        async_scheduling=False,
+        extra_config_overrides={"async_init": True},
+    )
+    ready = False
+    runner.offloading_spec.handler.is_ready = lambda: ready
+    runner.manager.prepare_store.side_effect = lambda keys, req_context: (
+        generate_store_output(keys)
+    )
+
+    runner.new_request(token_ids=[0] * block_size * 2)
+    runner.run(decoded_tokens=[0, 0])
+    assert _offloading_enabled_reports(runner) == []
+
+    ready = True
+    runner.run(decoded_tokens=[0, 0, 0], expected_stored=(0, 1))
+    assert _offloading_enabled_reports(runner) == [1]
+
+
+@pytest.mark.parametrize("is_cuda", [False, True])
+@pytest.mark.parametrize("async_init", [False, True])
+@pytest.mark.parametrize("spec_cls", [CPUOffloadingSpec, TieringOffloadingSpec])
+def test_uses_async_init_matches_the_spec(spec_cls, async_init, is_cuda):
+    """The API server reads uses_async_init before any engine steps, so it must
+    agree with the spec the engine builds."""
+    extra_config: dict[str, Any] = {"cpu_bytes_to_use": 1 << 20}
+    extra_config["async_init"] = async_init
+    if spec_cls is TieringOffloadingSpec:
+        extra_config["spec_name"] = "TieringOffloadingSpec"
+        extra_config["secondary_tiers"] = []
+    config = create_vllm_config(
+        kv_connector="OffloadingConnector",
+        kv_role="kv_both",
+        kv_connector_extra_config=extra_config,
+    )
+    with patch(
+        "vllm.v1.kv_offload.cpu.spec.current_platform.is_cuda", return_value=is_cuda
+    ):
+        spec = spec_cls(
+            build_offloading_config(config, _make_mamba_hybrid_kv_cache_config())
+        )
+        assert spec.async_init == spec_cls.uses_async_init(extra_config)
+    assert spec.async_init == (async_init and is_cuda and spec_cls is CPUOffloadingSpec)
 
 
 def test_async_init_waits_for_every_worker(request_runner):

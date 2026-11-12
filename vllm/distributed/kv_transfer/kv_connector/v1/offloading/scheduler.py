@@ -2431,6 +2431,9 @@ class OffloadingConnectorScheduler:
             self._ready_ranks |= meta.ready_ranks
             if len(self._ready_ranks) >= self.config.num_workers:
                 self._offloading_enabled = True
+                self._connector_stats.set_gauge(
+                    _ConnectorMetricName.OFFLOADING_ENABLED, 1
+                )
                 logger.info(
                     "KV offloading enabled: all %d workers ready",
                     self.config.num_workers,

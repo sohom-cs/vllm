@@ -783,6 +783,15 @@ class OffloadingSpec(ABC):
         """
         return ()
 
+    @classmethod
+    def uses_async_init(cls, extra_config: Mapping[str, Any]) -> bool:
+        """Whether this spec's workers finish their setup in the background.
+
+        Read before any engine steps, so it must agree with the spec's own
+        async_init.
+        """
+        return False
+
     def __init__(self, config: OffloadingConfig):
         self.config = config
         self.extra_config = config.extra_config
