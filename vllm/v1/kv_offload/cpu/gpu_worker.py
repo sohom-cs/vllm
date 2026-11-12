@@ -845,6 +845,7 @@ class CPUOffloadingWorker(OffloadingWorker):
         self._pin_pace = pin_pace
         self._setup_stop = threading.Event()
         self._ready = threading.Event()
+        self._setup_failed = threading.Event()
         if self._defer_host_setup:
             self._device = torch.accelerator.current_device_index()
         else:
@@ -916,6 +917,9 @@ class CPUOffloadingWorker(OffloadingWorker):
     def is_ready(self) -> bool:
         return self._ready.is_set()
 
+    def setup_failed(self) -> bool:
+        return self._setup_failed.is_set()
+
     def _host_setup(self) -> None:
         region = self._mmap_region
         assert region is not None
@@ -944,9 +948,11 @@ class CPUOffloadingWorker(OffloadingWorker):
                             "Pinning the CPU offload region failed; "
                             "offloading stays off"
                         )
+                        self._setup_failed.set()
                     return
         except Exception:
             logger.exception("CPU offload setup failed; offloading stays off")
+            self._setup_failed.set()
             return
         logger.info(
             "CPU offload region set up in the background: pre-fault %.1f s, pin %.1f s",

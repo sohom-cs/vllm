@@ -1131,12 +1131,20 @@ def test_pin_mmap_region_stop_leaves_region_pageable(iid, host_register):
     assert unregister.call_args_list == [call(base + 6 * PAGE_SIZE), call(base)]
 
 
-@pytest.mark.parametrize("case", ["ready", "pin_fails", "stopped"])
+@pytest.mark.parametrize(
+    "case", ["ready", "pin_fails", "setup_raises", "stopped", "stopped_while_pinning"]
+)
 def test_deferred_host_setup(iid, host_register, monkeypatch, case):
-    """The worker turns ready only after its region is pre-faulted and pinned."""
+    """The worker turns ready only after its region is pre-faulted and pinned.
+    setup_failed() is set when setup fails, not when it is stopped."""
     register, _ = host_register
     register.return_value = case != "pin_fails"
-    monkeypatch.setattr(gpu_worker, "_relax_stream_capture", lambda: None)
+
+    def relax_stream_capture() -> None:
+        if case == "setup_raises":
+            raise RuntimeError("cannot set the capture mode")
+
+    monkeypatch.setattr(gpu_worker, "_relax_stream_capture", relax_stream_capture)
     monkeypatch.setattr(
         gpu_worker.torch.accelerator, "set_device_index", lambda _: None
     )
@@ -1151,15 +1159,24 @@ def test_deferred_host_setup(iid, host_register, monkeypatch, case):
         worker._pin_pace = 0.0
         worker._setup_stop = threading.Event()
         worker._ready = threading.Event()
+        worker._setup_failed = threading.Event()
         if case == "stopped":
             worker._setup_stop.set()
+        if case == "stopped_while_pinning":
+
+            def register_then_stop(address: int, size: int) -> bool:
+                worker._setup_stop.set()
+                return True
+
+            register.side_effect = register_then_stop
 
         worker.start_deferred_setup()
         assert worker._setup_thread is not None
         worker._setup_thread.join()
 
         assert worker.is_ready() == region.is_pinned == (case == "ready")
-        assert register.called == (case != "stopped")
+        assert worker.setup_failed() == (case in ("pin_fails", "setup_raises"))
+        assert register.called == (case not in ("setup_raises", "stopped"))
 
 
 def test_pin_mmap_region_when_host_register_unsupported_stays_pageable(

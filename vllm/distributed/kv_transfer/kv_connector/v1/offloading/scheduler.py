@@ -621,6 +621,9 @@ class OffloadingConnectorScheduler:
         # worker has reported ready.
         self._offloading_enabled = not spec.async_init
         self._ready_ranks: set[int] = set()
+        # Set when a worker reports a failed setup: offloading stays off, and
+        # has_pending_push_work() stops waiting for it.
+        self._setup_failed = False
         if not self._offloading_enabled:
             logger.info("KV offloading is off until every worker is ready")
         self._connector_stats = OffloadingConnectorStats()
@@ -2404,9 +2407,15 @@ class OffloadingConnectorScheduler:
         state an idle engine settles into.
 
         A cache reset fence also keeps it stepping: the flush must reach the
-        workers and their reports come back before on_reset_flushed().
+        workers and their reports come back before on_reset_flushed(). So does
+        async_init until every worker is ready or one reports a failed setup,
+        since those reports arrive only with a step.
         """
-        if self._jobs or self._reset_fence:
+        if (
+            self._jobs
+            or self._reset_fence
+            or not (self._offloading_enabled or self._setup_failed)
+        ):
             return True
         with self._manager_locked():
             return self.manager.has_pending_work()
@@ -2438,6 +2447,8 @@ class OffloadingConnectorScheduler:
                     "KV offloading enabled: all %d workers ready",
                     self.config.num_workers,
                 )
+        if meta.setup_failed_ranks:
+            self._setup_failed = True
         if not meta.transfer_stats.is_empty():
             transfer_stats = OffloadingConnectorStats()
             if not meta.transfer_stats.load.is_empty():

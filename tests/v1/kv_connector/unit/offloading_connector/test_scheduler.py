@@ -2368,6 +2368,50 @@ def test_uses_async_init_matches_the_spec(spec_cls, async_init, is_cuda):
     assert spec.async_init == (async_init and is_cuda and spec_cls is CPUOffloadingSpec)
 
 
+def test_async_init_keeps_an_idle_engine_stepping_until_ready(request_runner):
+    block_size = 4
+    runner = request_runner(
+        block_size=block_size,
+        num_gpu_blocks=100,
+        async_scheduling=False,
+        extra_config_overrides={"async_init": True},
+    )
+    runner.offloading_spec.handler.is_ready = lambda: True
+    runner.manager.prepare_store.side_effect = lambda keys, req_context: (
+        generate_store_output(keys)
+    )
+    runner.manager.has_pending_work.return_value = False
+    # No request yet: only stepping brings the workers' readiness reports.
+    assert runner.connector_scheduler.has_pending_push_work()
+
+    runner.new_request(token_ids=[0] * block_size)
+    runner.run(decoded_tokens=[EOS_TOKEN_ID], expected_stored=(0,))
+    assert runner.connector_scheduler._offloading_enabled
+    assert not runner.connector_scheduler.has_pending_push_work()
+
+
+def test_async_init_stops_stepping_when_setup_fails(request_runner):
+    block_size = 4
+    runner = request_runner(
+        block_size=block_size,
+        num_gpu_blocks=100,
+        async_scheduling=False,
+        extra_config_overrides={"async_init": True},
+    )
+    runner.offloading_spec.handler.is_ready = lambda: False
+    runner.offloading_spec.handler.setup_failed = lambda: True
+    runner.manager.has_pending_work.return_value = False
+    assert runner.connector_scheduler.has_pending_push_work()
+
+    # The failure report ends the wait; offloading stays off.
+    runner.new_request(token_ids=[0] * block_size)
+    runner.run(decoded_tokens=[EOS_TOKEN_ID])
+    assert not runner.connector_scheduler._offloading_enabled
+    assert not runner.connector_scheduler.has_pending_push_work()
+    runner.manager.prepare_store.assert_not_called()
+    assert _offloading_enabled_reports(runner) == []
+
+
 def test_async_init_waits_for_every_worker(request_runner):
     runner = request_runner(
         block_size=4,

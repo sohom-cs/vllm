@@ -44,6 +44,17 @@ def test_aggregate_keeps_a_failure_reported_by_any_worker():
     assert failed.aggregate(ok).failed_jobs == {1}
 
 
+def test_aggregate_merges_setup_reports():
+    result = (
+        OffloadingWorkerMetadata(ready_ranks={0})
+        .aggregate(OffloadingWorkerMetadata(setup_failed_ranks={1}))
+        .aggregate(OffloadingWorkerMetadata(ready_ranks={2}))
+    )
+    assert isinstance(result, OffloadingWorkerMetadata)
+    assert result.ready_ranks == {0, 2}
+    assert result.setup_failed_ranks == {1}
+
+
 def test_aggregate_transfer_stats():
     meta1 = OffloadingWorkerMetadata(
         transfer_stats=TransferStats(

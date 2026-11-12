@@ -91,6 +91,8 @@ class OffloadingWorkerMetadata(KVConnectorWorkerMetadata):
     transfer_stats: TransferStats = field(default_factory=TransferStats)
     # Ranks of workers that became ready, under async_init. Each reports once.
     ready_ranks: set[int] = field(default_factory=set)
+    # Ranks of workers whose async_init setup failed. Each reports once.
+    setup_failed_ranks: set[int] = field(default_factory=set)
 
     def mark_completed(self, job_id: int, success: bool = True) -> None:
         """Record a transfer job completion from this worker."""
@@ -112,4 +114,5 @@ class OffloadingWorkerMetadata(KVConnectorWorkerMetadata):
             failed_jobs=self.failed_jobs | other.failed_jobs,
             transfer_stats=self.transfer_stats.aggregate(other.transfer_stats),
             ready_ranks=self.ready_ranks | other.ready_ranks,
+            setup_failed_ranks=self.setup_failed_ranks | other.setup_failed_ranks,
         )

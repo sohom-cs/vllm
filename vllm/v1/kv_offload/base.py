@@ -757,6 +757,10 @@ class OffloadingWorker(ABC):
         """Whether this worker can take transfers."""
         return True
 
+    def setup_failed(self) -> bool:
+        """Whether deferred setup ended without making this worker ready."""
+        return False
+
     def shutdown(self) -> None:
         return
 

@@ -66,7 +66,7 @@ class OffloadingConnectorWorker:
             tuple[int, GPULoadStoreSpec, LoadStoreSpec]
         ] = []
         self._connector_worker_meta = OffloadingWorkerMetadata()
-        # Under async_init, report readiness once.
+        # Under async_init, report readiness, or a failed setup, once.
         self._report_ready = self.spec.async_init
 
     def _init_worker(self, kv_caches: CanonicalKVCaches) -> None:
@@ -345,14 +345,20 @@ class OffloadingConnectorWorker:
         return failed_recving
 
     def build_connector_worker_meta(self) -> OffloadingWorkerMetadata | None:
-        """Return job completions, and readiness under async_init, since the
+        """Return job completions, and how async_init setup ended, since the
         last call."""
-        if self._report_ready and self.worker is not None and self.worker.is_ready():
-            self._connector_worker_meta.ready_ranks = {self.spec.config.parallel.rank}
-            self._report_ready = False
+        if self._report_ready and self.worker is not None:
+            rank = self.spec.config.parallel.rank
+            if self.worker.is_ready():
+                self._connector_worker_meta.ready_ranks = {rank}
+                self._report_ready = False
+            elif self.worker.setup_failed():
+                self._connector_worker_meta.setup_failed_ranks = {rank}
+                self._report_ready = False
         if (
             not self._connector_worker_meta.completed_jobs
             and not self._connector_worker_meta.ready_ranks
+            and not self._connector_worker_meta.setup_failed_ranks
         ):
             return None
         meta = self._connector_worker_meta
